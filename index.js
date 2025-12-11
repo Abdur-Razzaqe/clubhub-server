@@ -28,6 +28,7 @@ async function run() {
 
     const db = client.db("club_hub_db");
     const clubsCollection = db.collection("clubs");
+    const eventsCollection = db.collection("events");
 
     // clubs api
     app.get("/clubs", async (req, res) => {
@@ -56,6 +57,13 @@ async function run() {
       const club = req.body;
       console.log("New Club", club);
       const result = await clubsCollection.insertOne(club);
+      res.send(result);
+    });
+
+    // all upcoming events
+    app.get("/events", async (req, res) => {
+      const today = new Date();
+      const result = await eventsCollection.find().toArray();
       res.send(result);
     });
 
