@@ -29,6 +29,7 @@ async function run() {
     const db = client.db("club_hub_db");
     const clubsCollection = db.collection("clubs");
     const eventsCollection = db.collection("events");
+    const registrationsCollection = db.collection("registrations");
 
     // clubs api
     app.get("/clubs", async (req, res) => {
@@ -62,8 +63,41 @@ async function run() {
 
     // all upcoming events
     app.get("/events", async (req, res) => {
-      const today = new Date();
-      const result = await eventsCollection.find().toArray();
+      const result = await eventsCollection
+        .find()
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    app.get("/events/:id", async (req, res) => {
+      const eventId = req.params.id;
+      const result = await eventsCollection.findOne({
+        _id: new ObjectId(eventId),
+      });
+
+      res.send(result);
+    });
+
+    // create event api
+    app.post("/events", async (req, res) => {
+      const event = { ...req.body, createdAt: new Date() };
+      const result = await eventsCollection.insertOne(event);
+      res.send(result);
+    });
+
+    // event register api
+    app.post("/event-registrations", async (req, res) => {
+      const registration = req.body;
+      registration.registeredAt = new Date();
+      const result = await registrationsCollection.insertOne(registration);
+      res.send(result);
+    });
+
+    app.get("/event-registration/:eventId", async (req, res) => {
+      const eventId = req.params.eventId;
+
+      const result = await registrationsCollection.find({ eventId }).toArray();
       res.send(result);
     });
 
