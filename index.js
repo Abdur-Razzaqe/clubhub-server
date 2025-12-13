@@ -37,9 +37,31 @@ async function run() {
       const user = req.body;
       user.role = "member";
       user.createdAt = new Date();
+      const email = user.email;
+      const userExists = await userCollection.findOne({ email });
+
+      if (userExists) {
+        return res.send({ message: "user exists" });
+      }
 
       const result = await userCollection.insertOne(user);
       res.send(result);
+    });
+
+    app.get("/users/:email", async (req, res) => {
+      const email = req.params.email;
+      const user = await userCollection.findOne({ email });
+      res.send(user);
+    });
+
+    // user role api
+    app.get("/users/role/:email", async (req, res) => {
+      const email = req.params.email;
+      const user = await userCollection.findOne({ email });
+      if (!user) {
+        return res.status(404).send({ role: null });
+      }
+      res.send({ role: user.role });
     });
 
     // clubs api
