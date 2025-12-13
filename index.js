@@ -27,9 +27,20 @@ async function run() {
     await client.connect();
 
     const db = client.db("club_hub_db");
+    const userCollection = db.collection("users");
     const clubsCollection = db.collection("clubs");
     const eventsCollection = db.collection("events");
     const registrationsCollection = db.collection("registrations");
+
+    // user api
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      user.role = "member";
+      user.createdAt = new Date();
+
+      const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
 
     // clubs api
     app.get("/clubs", async (req, res) => {
@@ -81,23 +92,98 @@ async function run() {
 
     // create event api
     app.post("/events", async (req, res) => {
-      const event = { ...req.body, createdAt: new Date() };
-      const result = await eventsCollection.insertOne(event);
+      const event = req.body;
+      const club = await clubsCollection.findOne({
+        managerEmail: event.managerEmail,
+      });
+
+      if (!club) {
+        return res
+          .status(404)
+          .send({ message: "Club not found for this manager" });
+      }
+
+      const newEvent = {
+        ...event,
+        clubId: club._id.toString(),
+        createdAt: new Date(),
+      };
+
+      const result = await eventsCollection.insertOne(newEvent);
       res.send(result);
     });
 
     // event register api
     app.post("/event-registrations", async (req, res) => {
-      const registration = req.body;
-      registration.registeredAt = new Date();
-      const result = await registrationsCollection.insertOne(registration);
-      res.send(result);
+      try {
+        const { eventId, userEmail, paymentId } = req.body;
+
+        if (!eventId || !userEmail) {
+          return res.status(400).send({ message: "Missing required fields" });
+        }
+
+        const event = await eventsCollection.findOne({
+          _id: new ObjectId(eventId),
+        });
+        if (!event) return res.status(404).send({ message: "Event not found" });
+
+        const alreadyRegistered = await registrationsCollection.findOne({
+          eventId,
+          userEmail,
+          status: "registered",
+        });
+
+        if (alreadyRegistered) {
+          return res
+            .status(400)
+            .send({ message: "Already registered for this event" });
+        }
+
+        const registration = {
+          eventId: eventId,
+          userEmail: userEmail,
+          clubId: event.clubId,
+          status: "registered",
+          // paymentId: paymentId || null,
+          registeredAt: new Date(),
+        };
+        const result = await registrationsCollection.insertOne(registration);
+
+        res.send({
+          message: "Registration successful",
+          registrationId: result.insertedId,
+        });
+      } catch (error) {
+        res.status(500).send({ message: "Server error", error });
+      }
     });
 
-    app.get("/event-registration/:eventId", async (req, res) => {
-      const eventId = req.params.eventId;
+    // cancel registration
+    app.post("/event-registrations/:id/cancel", async (req, res) => {
+      const id = req.params.id;
+      const result = await registrationsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: "cancelled" } }
+      );
+      res.send({
+        message: "Registration cancelled",
+        result,
+      });
+    });
 
-      const result = await registrationsCollection.find({ eventId }).toArray();
+    // get user registration
+    app.get("/event-registrations/user/:email", async (req, res) => {
+      const email = req.params.email;
+      const result = await registrationsCollection
+        .find({ userEmail: email })
+        .toArray();
+      res.send(result);
+    });
+    // get all registration for an event
+    app.get("/event-registrations/event/:eventId", async (req, res) => {
+      const result = await registrationsCollection
+        .find({ eventId: req.params.eventId })
+        .toArray();
       res.send(result);
     });
 
