@@ -64,6 +64,22 @@ async function run() {
       res.send({ role: user.role });
     });
 
+    app.get("/users", async (req, res) => {
+      const result = await userCollection.find().toArray();
+      res.send(result);
+    });
+
+    // update user role api
+    app.patch("users/role/:id", async (req, res) => {
+      const id = req.params.id;
+      const { role } = req.body;
+      const result = await userCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { role } }
+      );
+      res.send(result);
+    });
+
     // clubs api
     app.get("/clubs", async (req, res) => {
       const result = await clubsCollection.find().toArray();
