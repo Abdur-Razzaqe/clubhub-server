@@ -593,7 +593,7 @@ async function run() {
           clubs[item._id] = item.count;
         });
 
-        const payments = paymentsCollection
+        const payments = await paymentsCollection
           .aggregate([
             {
               $group: {
@@ -603,13 +603,14 @@ async function run() {
             },
           ])
           .toArray();
+        const totalPayment = payments[0]?.totalAmount || 0;
 
         res.send({
           totalUsers,
           clubs,
           totalEvents,
           totalMemberships,
-          totalPaymentAmount: payments[0]?.totalAmount || 0,
+          totalPayment,
         });
       } catch (error) {
         res
@@ -676,20 +677,24 @@ async function run() {
           .find({ userEmail, status: "active" })
           .toArray();
 
-        const clubIds = memberships.map((m) => new ObjectId(m.clubId));
         const totalClubs = memberships.length;
+        const clubIds = memberships.map((m) => new ObjectId(m.clubId));
 
         const totalEvents = await registrationsCollection.countDocuments({
           userEmail,
           status: "registered",
         });
-        let updateEvents = [];
+        let upcomingEvents = [];
         if (clubIds.length > 0) {
           upcomingEvents = await eventsCollection
             .find({ clubId: { $in: clubIds }, eventDate: { $gte: new Date() } })
             .sort({ eventDate: 1 })
             .toArray();
         }
+        const clubs = await clubsCollection
+          .find({ _id: { $in: clubIds } })
+          .project({ clubName: 1 })
+          .toArray();
 
         const clubMap = {};
 
@@ -704,7 +709,7 @@ async function run() {
         }));
 
         const payments = await paymentsCollection
-          .find({ memberEmail: userEmail })
+          .find({ userEmail })
           .sort({ createdAt: -1 })
           .toArray();
         res.send({
