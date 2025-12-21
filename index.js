@@ -503,19 +503,21 @@ async function run() {
             _id: new ObjectId(eventId),
           });
 
-          if (!event)
-            return res.status(404).send({ message: "Event not found" });
+          if (!eventId) {
+            return res.status(400).send({ message: "Invalid event Id format" });
+          }
 
           const club = await clubsCollection.findOne({
             _id: new ObjectId(event.clubId),
-            managerEmail,
+            managerEmail: managerEmail,
           });
+
           if (!club) {
             return res.status(403).send({ message: "Forbidden access" });
           }
 
           const registrations = await registrationsCollection
-            .find({ eventId })
+            .find({ eventId: eventId })
             .sort({ registeredAt: -1 })
             .toArray();
           res.send(registrations);
@@ -533,19 +535,31 @@ async function run() {
         .find({ userEmail })
         .toArray();
 
+      const eventIds = registrations.map((r) => new ObjectId(r.eventId));
+
       const events = await eventsCollection
         .find({
-          _id: { $in: registrations.map((r) => new ObjectId(r.eventId)) },
+          _id: { $in: eventIds },
         })
+        .toArray();
+
+      const clubIds = events.map((e) => new ObjectId(e.clubId));
+
+      const clubs = await clubsCollection
+        .find({ _id: { $in: clubIds } })
         .toArray();
 
       const result = registrations.map((reg) => {
         const event = events.find((e) => e._id.toString() === reg.eventId);
+
+        const club = clubs.find((c) => c._id.toString() === event?.clubId);
+
         return {
-          ...reg,
+          _id: reg._id,
           title: event?.title || "N/A",
-          clubName: event?.clubName || "N/A",
+          clubName: club?.clubName || "N/A",
           eventDate: event?.eventDate || null,
+          status: reg.status,
         };
       });
 
@@ -649,35 +663,44 @@ async function run() {
     );
 
     // member overview api
-    app.get("/member/overview", verifyFBToken, async (req, res) => {
+    app.get("/member/overview/:email", verifyFBToken, async (req, res) => {
       try {
-        const userEmail = registrationsCollection.decoded_email;
+        const email = req.params.email;
+        const userEmail = req.decoded_email;
+
+        if (email !== userEmail) {
+          res.status(403).send({ message: "forbidden access" });
+        }
+
         const memberships = await membershipsCollection
           .find({ userEmail, status: "active" })
           .toArray();
 
-        const clubIds = memberships.map((m) => m.clubId);
+        const clubIds = memberships.map((m) => new ObjectId(m.clubId));
         const totalClubs = memberships.length;
 
         const totalEvents = await registrationsCollection.countDocuments({
           userEmail,
           status: "registered",
         });
+        let updateEvents = [];
+        if (clubIds.length > 0) {
+          upcomingEvents = await eventsCollection
+            .find({ clubId: { $in: clubIds }, eventDate: { $gte: new Date() } })
+            .sort({ eventDate: 1 })
+            .toArray();
+        }
 
-        const upcomingEvents = await eventsCollection
-          .find({ club: { $in: clubIds }, eventDate: { $gte: new Date() } })
-          .sort({ eventDate: 1 })
-          .toArray();
         const clubMap = {};
-        const clubs = await clubsCollection
-          .find({ _id: { $in: clubIds.map((id) => new ObjectId(id)) } })
-          .toArray();
+
         clubs.forEach((c) => {
           clubMap[c._id.toString()] = c.clubName;
         });
         const eventsWithClub = upcomingEvents.map((e) => ({
-          ...e,
-          clubName: clubMap[e.clubId || "Unknown Club"],
+          _id: e._id,
+          title: e.title,
+          eventDate: e.eventDate,
+          clubName: clubMap[e.clubId?.toString()] || "Unknown Club",
         }));
 
         const payments = await paymentsCollection
@@ -736,11 +759,33 @@ async function run() {
 
     // member api
     app.get("/member/my-clubs", verifyFBToken, async (req, res) => {
-      const email = req.decoded_email;
-      const result = await membershipsCollection
-        .find({ userEmail: email, status: "active" })
-        .toArray();
-      res.send(result);
+      try {
+        const email = req.decoded_email;
+        const memberships = await membershipsCollection
+          .find({ userEmail: email, status: "active" })
+          .toArray();
+
+        const clubIds = memberships.map((m) => new ObjectId(m.clubId));
+
+        const clubs = await clubsCollection
+          .find({ _id: { $in: clubIds } })
+          .toArray();
+
+        const result = memberships.map((m) => {
+          const club = clubs.find((c) => c._id.toString() === m.clubId);
+
+          return {
+            clubId: m.clubId,
+            clubName: club?.clubName,
+            location: club?.location,
+            status: m.status,
+            expiresAt: m.expiresAt || "Lifetime",
+          };
+        });
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to load my clubs" });
+      }
     });
 
     app.get(
