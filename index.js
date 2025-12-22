@@ -142,12 +142,33 @@ async function run() {
 
     // clubs api
     app.get("/clubs", async (req, res) => {
-      const result = await clubsCollection
-        .find()
-        .sort({ createdAt: -1 })
-        .toArray();
+      try {
+        const { search, category } = req.query;
+        let query = {};
 
-      res.send(result);
+        if (search && category) {
+          query = {
+            $and: [
+              { clubName: { $regex: search, $options: "i" } },
+              { category: category },
+            ],
+          };
+        } else if (search) {
+          query = { clubName: { $regex: search, $options: "i" } };
+        } else if (category) {
+          query = { category: category };
+        }
+
+        const result = await clubsCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error("clubs search/filter error", error);
+        res.status(500).send({ message: "Failed to load clubs" });
+      }
     });
 
     app.get("/admin/clubs", verifyFBToken, verifyAdmin, async (req, res) => {
@@ -259,11 +280,32 @@ async function run() {
 
     // all upcoming events
     app.get("/events", async (req, res) => {
-      const result = await eventsCollection
-        .find()
-        .sort({ createdAt: -1 })
-        .toArray();
-      res.send(result);
+      try {
+        const { search, category } = req.query;
+        let query = {};
+
+        if (search && category) {
+          query = {
+            $and: [
+              { title: { $regex: search, $options: "i" } },
+              { category: category },
+            ],
+          };
+        } else if (search) {
+          query = { title: { $regex: search, $options: "i" } };
+        } else if (category) {
+          query = { category: category };
+        }
+
+        const result = await eventsCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("clubs search/filter error", error);
+        res.status(500).send({ message: "Failed to load clubs" });
+      }
     });
 
     app.get(
@@ -878,7 +920,8 @@ async function run() {
     // payment success api
     app.post("/payments/success", verifyFBToken, async (req, res) => {
       try {
-        const { clubId, userEmail } = req.body;
+        const { clubId, userEmail, amount } = req.body;
+
         const club = await clubsCollection.findOne({
           _id: new ObjectId(clubId),
         });
@@ -889,7 +932,7 @@ async function run() {
           userEmail: userEmail || req.decoded_email,
           clubId: clubId,
           clubName: club.clubName,
-          amount: club.membershipFee,
+          amount: amount || club.membershipFee || 0,
           type: "membership",
           status: "paid",
           createdAt: new Date(),
@@ -906,41 +949,6 @@ async function run() {
         res.status(500).send({ message: "Failed to save payment" });
       }
     });
-
-    //     if (!clubId || !amount) {
-    //       res.status(400).send({ message: "Invalid payment data" });
-    //     }
-
-    //     const existing = await membershipsCollection.findOne({
-    //       clubId,
-    //       userEmail,
-    //     });
-    //     if (!existing) {
-    //       await membershipsCollection.insertOne({
-    //         clubId,
-    //         userEmail,
-    //         status: "active",
-    //         paymentStatus: "paid",
-    //         joinedAt: new Date(),
-    //       });
-    //     }
-    //     const paymentRecord = {
-    //       clubId,
-    //       clubName,
-    //       userEmail,
-    //       amount,
-    //       type,
-    //       status: "paid",
-    //       createdAt: new Date(),
-    //     };
-    //     await paymentsCollection.insertOne(paymentRecord);
-
-    //     res.send({ success: true, message: "Payment recorded successfully" });
-    //   } catch (error) {
-    //     console.error(error);
-    //     res.status(500).send({ message: "Payment recording failed" });
-    //   }
-    // });
 
     app.get("/admin/payments", verifyFBToken, verifyAdmin, async (req, res) => {
       try {
@@ -1001,10 +1009,10 @@ async function run() {
     });
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
