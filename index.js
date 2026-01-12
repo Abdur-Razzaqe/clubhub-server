@@ -52,7 +52,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     const db = client.db("club_hub_db");
     const userCollection = db.collection("users");
@@ -139,6 +139,57 @@ async function run() {
         res.send(result);
       }
     );
+
+    app.put("/users/update-profile", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+        const { name, photoUrl, phone } = req.body;
+
+        const result = await userCollection.updateOne(
+          { email },
+          {
+            $set: {
+              name,
+              photoUrl,
+              phone,
+              updatedAt: new Date(),
+            },
+          }
+        );
+        res.send({
+          success: true,
+          message: "Profile updated successfully",
+          modifiedCount: result.modifiedCount,
+        });
+      } catch (error) {
+        console.error("Profile update error:", error);
+        res.status(500).send({ message: "Failed to update profile" });
+      }
+    });
+
+    app.put("/users/change-password", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+        const { newPassword } = req.body;
+
+        if (!newPassword || newPassword.length < 6) {
+          return res
+            .status(400)
+            .send({ message: "Password must be at least 6 characters long" });
+        }
+        const user = await admin.auth().getUserByEmail(email);
+        await admin.auth().updateUser(user.uid, {
+          password: newPassword,
+        });
+        res.send({
+          success: true,
+          message: "Password updated successfully",
+        });
+      } catch (error) {
+        console.error("Password update error:", error);
+        res.status(500).send({ message: "Failed to update password" });
+      }
+    });
 
     // clubs api
     app.get("/clubs", async (req, res) => {
@@ -260,7 +311,7 @@ async function run() {
       const result = await clubsCollection
         .find()
         .sort({ createdAt: -1 })
-        .limit(6)
+        .limit(8)
         .toArray();
       res.send(result);
     });
@@ -1008,14 +1059,31 @@ async function run() {
       }
     });
 
-    // Send a ping to confirm a successful connection
+    app.get("/home/stats", async (req, res) => {
+      try {
+        const totalUsers = await userCollection.countDocuments();
+        const totalClubs = await clubsCollection.countDocuments({
+          status: "approved",
+        });
+        const totalEvents = await eventsCollection.countDocuments();
+        const totalMemberships = await membershipsCollection.countDocuments();
+
+        res.send({
+          totalUsers,
+          totalClubs,
+          totalEvents,
+          totalMemberships,
+        });
+      } catch (error) {
+        res.status(500).send({ message: "Failed to load home stats" });
+      }
+    });
+
     // await client.db("admin").command({ ping: 1 });
-    // console.log(
-    //   "Pinged your deployment. You successfully connected to MongoDB!"
-    // );
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!"
+    );
   } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
   }
 }
 run().catch(console.dir);
