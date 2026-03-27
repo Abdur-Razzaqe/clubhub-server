@@ -9,7 +9,7 @@ const port = process.env.PORT || 3000;
 
 const admin = require("firebase-admin");
 const decoded = Buffer.from(process.env.BF_SERVICE_KEY, "base64").toString(
-  "utf8"
+  "utf8",
 );
 const serviceAccount = JSON.parse(decoded);
 
@@ -22,8 +22,10 @@ app.use(express.json());
 app.use(cors());
 
 const verifyFBToken = async (req, res, next) => {
+  console.log("Received Authorization header:", req.headers.authorization);
   const token = req.headers.authorization;
   if (!token) {
+    console.log("No token found in request!");
     return res.status(401).send({ message: "unauthorized access" });
   }
 
@@ -32,7 +34,9 @@ const verifyFBToken = async (req, res, next) => {
     const decoded = await admin.auth().verifyIdToken(idToken);
     console.log("decoded", decoded);
     req.decoded_email = decoded.email;
+    console.log("Token verified successfully:", decoded.email);
   } catch (err) {
+    console.error("Error verifying token:", err);
     return res.status(401).send({ message: "unauthorized access" });
   }
   next();
@@ -134,10 +138,10 @@ async function run() {
         }
         const result = await userCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { role } }
+          { $set: { role } },
         );
         res.send(result);
-      }
+      },
     );
 
     app.put("/users/update-profile", verifyFBToken, async (req, res) => {
@@ -154,7 +158,7 @@ async function run() {
               phone,
               updatedAt: new Date(),
             },
-          }
+          },
         );
         res.send({
           success: true,
@@ -237,10 +241,10 @@ async function run() {
         const { status } = req.body;
         const result = await clubsCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { status } }
+          { $set: { status } },
         );
         res.send(result);
-      }
+      },
     );
 
     app.get(
@@ -257,7 +261,7 @@ async function run() {
           .find({ managerEmail: email })
           .toArray();
         res.send(result);
-      }
+      },
     );
 
     // club details api
@@ -291,7 +295,7 @@ async function run() {
           console.error("Manager club members error:", error);
           res.status(500).send({ message: "Failed to load club members" });
         }
-      }
+      },
     );
 
     // update club api
@@ -301,7 +305,7 @@ async function run() {
 
       const result = await clubsCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $set: updateData }
+        { $set: updateData },
       );
       res.send(result);
     });
@@ -371,7 +375,7 @@ async function run() {
           .sort({ createdAt: -1 })
           .toArray();
         res.send(result);
-      }
+      },
     );
 
     app.get("/events/:id", async (req, res) => {
@@ -411,7 +415,7 @@ async function run() {
 
         const result = await eventsCollection.insertOne(newEvent);
         res.send(result);
-      }
+      },
     );
     // event update api
     app.put(
@@ -448,7 +452,7 @@ async function run() {
                 maxAttendees: parseInt(updateData.maxAttendees) || 0,
                 updatedAt: new Date(),
               },
-            }
+            },
           );
           if (result.modifiedCount === 0) {
             res.status(200).send({ message: "No changes made to the event" });
@@ -461,7 +465,7 @@ async function run() {
           console.error(error);
           res.status(500).send({ message: "Failed to update event" });
         }
-      }
+      },
     );
 
     // event delete api
@@ -504,69 +508,61 @@ async function run() {
           console.error("Delete Error", error);
           res.status(500).send({ message: "Failed to delete event" });
         }
-      }
+      },
     );
 
     // event register api
     app.post("/event-registrations", verifyFBToken, async (req, res) => {
       try {
-        const { eventId, paymentId } = req.body;
+        const { eventId, paymentId, status } = req.body;
         const userEmail = req.decoded_email;
 
-        if (!userEmail) {
-          return res
-            .status(401)
-            .send({ message: "unauthorized email not found" });
-        }
-        if (!eventId) {
-          return res.status(400).send({ message: "Event ID is required" });
-        }
-        if (!ObjectId.isValid(eventId)) {
-          return res.status(400).send({ message: "Event not found" });
-        }
+        if (!eventId)
+          return res.status(400).send({ message: "Event ID required" });
 
-        const event = await eventsCollection.findOne({
-          _id: new ObjectId(eventId),
-        });
-        if (!event) return res.status(404).send({ message: "Event not found" });
-
-        const alreadyRegistered = await registrationsCollection.findOne({
-          eventId: eventId,
-          userEmail: userEmail,
+        const existing = await registrationsCollection.findOne({
+          eventId,
+          userEmail,
         });
 
-        if (alreadyRegistered) {
-          return res
-            .status(400)
-            .send({ message: "Already registered for this event" });
+        if (existing) {
+          if (paymentId) {
+            const result = await registrationsCollection.updateOne(
+              { eventId, userEmail },
+              {
+                $set: {
+                  paymentId,
+                  status: status || "paid",
+                  paidAt: new Date(),
+                },
+              },
+            );
+            return res.send({ message: "Payment updated", result });
+          }
+          return res.status(400).send({ message: "Already registered" });
         }
 
         const registration = {
-          eventId: eventId,
+          eventId,
           userEmail,
-          clubId: event.clubId,
-          status: "registered",
+          clubId: req.body.clubId,
+          status: status || "registered",
           paymentId: paymentId || null,
           registeredAt: new Date(),
         };
-        const result = await registrationsCollection.insertOne(registration);
 
-        res.send({
-          message: "Registration successful",
-          registrationId: result.insertedId,
-        });
+        const result = await registrationsCollection.insertOne(registration);
+        res.send({ message: "Registration successful", result });
       } catch (error) {
-        console.error("Registration Error", error);
         res.status(500).send({ message: "Server error", error: error.message });
       }
     });
-
     // cancel registration
     app.post("/event-registrations/:id/cancel", async (req, res) => {
       const id = req.params.id;
       const result = await registrationsCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $set: { status: "cancelled" } }
+        { $set: { status: "cancelled" } },
       );
       res.send({
         message: "Registration cancelled",
@@ -618,7 +614,7 @@ async function run() {
           console.error("Event registrations error", error);
           res.status(500).send({ message: "Internal Server Error" });
         }
-      }
+      },
     );
 
     app.get("/member/my-events", verifyFBToken, async (req, res) => {
@@ -738,7 +734,7 @@ async function run() {
 
           const totalPayments = payments.reduce(
             (sum, p) => sum + Number(p.amount || 0),
-            0
+            0,
           );
 
           res.send({
@@ -753,7 +749,7 @@ async function run() {
             .status(500)
             .send({ message: "Failed to load admin overview", error });
         }
-      }
+      },
     );
 
     // member overview api
@@ -771,21 +767,35 @@ async function run() {
           .toArray();
 
         const totalClubs = memberships.length;
-        const clubIds = memberships.map((m) => new ObjectId(m.clubId));
+
+        const clubIdStrings = memberships.map((m) => m.clubId.toString());
+        const clubIdObjects = memberships
+          .map((m) => {
+            try {
+              return new ObjectId(m.clubId);
+            } catch {
+              return null;
+            }
+          })
+          .filter((id) => id !== null);
 
         const totalEvents = await registrationsCollection.countDocuments({
           userEmail,
-          status: "registered",
+          status: { $in: ["registered", "paid"] },
         });
-        let upcomingEvents = [];
-        if (clubIds.length > 0) {
+        let eventsWithClub = [];
+        if (clubIdStrings.length > 0) {
           upcomingEvents = await eventsCollection
-            .find({ clubId: { $in: clubIds }, eventDate: { $gte: new Date() } })
+            .find({
+              clubId: { $in: [...clubIdStrings, ...clubIdObjects] },
+              eventDate: { $gte: new Date().toISOString() },
+            })
             .sort({ eventDate: 1 })
+            .limit(5)
             .toArray();
         }
         const clubs = await clubsCollection
-          .find({ _id: { $in: clubIds } })
+          .find({ _id: { $in: clubIdObjects } })
           .project({ clubName: 1 })
           .toArray();
 
@@ -794,7 +804,7 @@ async function run() {
         clubs.forEach((c) => {
           clubMap[c._id.toString()] = c.clubName;
         });
-        const eventsWithClub = upcomingEvents.map((e) => ({
+        eventsWithClub = upcomingEvents.map((e) => ({
           _id: e._id,
           title: e.title,
           eventDate: e.eventDate,
@@ -804,6 +814,7 @@ async function run() {
         const payments = await paymentsCollection
           .find({ userEmail })
           .sort({ createdAt: -1 })
+          .limit(10)
           .toArray();
         res.send({
           totalClubs,
@@ -852,7 +863,7 @@ async function run() {
           ])
           .toArray();
         res.send(result);
-      }
+      },
     );
 
     // member api
@@ -895,17 +906,27 @@ async function run() {
           const managerEmail = req.decoded_email;
 
           const clubs = await clubsCollection.find({ managerEmail }).toArray();
-          const clubIds = clubs.map((c) => c._id);
+          if (clubs.length === 0) {
+            return res.send({ clubs: [], members: [] });
+          }
+
+          const clubIds = clubs.map((c) => c._id.toString());
 
           const members = await membershipsCollection
-            .find({ clubId: { $in: clubIds } })
+            .find({
+              clubId: { $in: clubIds },
+              status: "active",
+            })
             .toArray();
+          console.log(
+            `Found ${members.length} members for manager: ${managerEmail}`,
+          );
           res.send({ members, clubs });
         } catch (error) {
           console.error(error);
           res.status(500).send({ message: "Failed to fetch club members" });
         }
-      }
+      },
     );
     // set membership as expired
     app.patch(
@@ -917,22 +938,24 @@ async function run() {
           const id = req.params.id;
           const result = await membershipsCollection.updateOne(
             { _id: new ObjectId(id) },
-            { $set: { status: "expired" } }
+            { $set: { status: "expired" } },
           );
           res.send(result);
         } catch (error) {
           res.status(500).send({ message: "Failed to expire membership" });
         }
-      }
+      },
     );
 
     // payment related apis
     app.post("/create-checkout-session", verifyFBToken, async (req, res) => {
+      console.log("🔥 /create-checkout-session called!");
+      console.log("Incoming request body:", req.body);
       try {
         const paymentInfo = req.body;
-        const { amount, clubName, memberEmail, clubId } = paymentInfo;
+        const { amount, clubName, userEmail, clubId } = paymentInfo;
 
-        if (!amount || !clubName || !memberEmail || !clubId)
+        if (!amount || !clubName || !userEmail || !clubId)
           return res.status(400).send({ message: "Invalid payment data" });
 
         const session = await stripe.checkout.sessions.create({
@@ -949,17 +972,17 @@ async function run() {
               quantity: 1,
             },
           ],
-          customer_email: memberEmail,
+          customer_email: userEmail,
           mode: "payment",
           metadata: {
             clubId,
             clubName,
-            memberEmail,
+            userEmail,
             amount,
             type: "membership",
           },
           success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?clubsId=${paymentInfo.clubId}&amount=${paymentInfo.amount}&clubName=${paymentInfo.clubName}`,
-          cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
+          cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancel`,
         });
 
         res.send({ url: session.url });
@@ -971,36 +994,75 @@ async function run() {
     // payment success api
     app.post("/payments/success", verifyFBToken, async (req, res) => {
       try {
-        const { clubId, userEmail, amount } = req.body;
+        const { clubId, eventId, userEmail, amount, transactionId, type } =
+          req.body;
+        const email = userEmail || req.decoded_email;
+
+        if (!ObjectId.isValid(clubId)) {
+          return res.status(400).send({ message: "Invalid clubId" });
+        }
 
         const club = await clubsCollection.findOne({
           _id: new ObjectId(clubId),
         });
-        if (!club) {
-          return res.status(404).send({ message: "Club not found" });
-        }
+        if (!club) return res.status(404).send({ message: "Club not found" });
+
+        // ১. পেমেন্ট রেকর্ড সেভ করা
         const paymentData = {
-          userEmail: userEmail || req.decoded_email,
+          userEmail: email,
           clubId: clubId,
+          eventId: eventId || null,
           clubName: club.clubName,
-          amount: amount || club.membershipFee || 0,
-          type: "membership",
+          amount: parseFloat(amount) || 0,
+          type: type || "membership",
           status: "paid",
+          transactionId: transactionId || "ST_BYPASS_" + Date.now(),
           createdAt: new Date(),
         };
 
-        const result = await paymentsCollection.insertOne(paymentData);
+        const paymentResult = await paymentsCollection.insertOne(paymentData);
+
+        // ২. যদি এটি ইভেন্ট রেজিস্ট্রেশন হয়
+        if (type === "registrations" && eventId) {
+          await registrationsCollection.updateOne(
+            { eventId, userEmail: email },
+            {
+              $set: {
+                status: "paid",
+                paymentId: transactionId,
+                clubId,
+                paidAt: new Date(),
+              },
+            },
+            { upsert: true },
+          );
+        }
+        // ৩. যদি এটি ক্লাব মেম্বারশিপ হয়
+        else {
+          const alreadyMember = await membershipsCollection.findOne({
+            userEmail: email,
+            clubId: clubId,
+          });
+          if (!alreadyMember) {
+            await membershipsCollection.insertOne({
+              userEmail: email,
+              clubId: clubId,
+              status: "active",
+              joinedAt: new Date(),
+            });
+          }
+        }
 
         res.send({
-          message: "Payment confirmed",
-          insertedId: result.insertedId,
+          success: true,
+          message: "Payment and record confirmed",
+          insertedId: paymentResult.insertedId, // এখানে paymentResult হবে
         });
       } catch (error) {
-        console.error("payment API error", err);
+        console.error("payment API error", error);
         res.status(500).send({ message: "Failed to save payment" });
       }
     });
-
     app.get("/admin/payments", verifyFBToken, verifyAdmin, async (req, res) => {
       try {
         const result = await paymentsCollection
@@ -1033,14 +1095,14 @@ async function run() {
 
           const totalPayments = (await payments).reduce(
             (sum, p) => sum + (p.amount || 0),
-            0
+            0,
           );
           res.send({ totalPayments, payments });
         } catch (error) {
           console.error(error);
           res.status(500).send({ message: "Failed to fetch manager payments" });
         }
-      }
+      },
     );
 
     // member payments api
@@ -1081,7 +1143,7 @@ async function run() {
 
     // await client.db("admin").command({ ping: 1 });
     console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
+      "Pinged your deployment. You successfully connected to MongoDB!",
     );
   } finally {
   }
