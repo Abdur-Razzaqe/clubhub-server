@@ -759,13 +759,12 @@ async function run() {
         const userEmail = req.decoded_email;
 
         if (email !== userEmail) {
-          res.status(403).send({ message: "forbidden access" });
+          return res.status(403).send({ message: "forbidden access" });
         }
 
         const memberships = await membershipsCollection
           .find({ userEmail, status: "active" })
           .toArray();
-
         const totalClubs = memberships.length;
 
         const clubIdStrings = memberships.map((m) => m.clubId.toString());
@@ -781,9 +780,9 @@ async function run() {
 
         const totalEvents = await registrationsCollection.countDocuments({
           userEmail,
-          status: { $in: ["registered", "paid"] },
+          status: "paid",
         });
-        let eventsWithClub = [];
+        let eventWithClub = [];
         if (clubIdStrings.length > 0) {
           upcomingEvents = await eventsCollection
             .find({
@@ -804,7 +803,7 @@ async function run() {
         clubs.forEach((c) => {
           clubMap[c._id.toString()] = c.clubName;
         });
-        eventsWithClub = upcomingEvents.map((e) => ({
+        eventWithClub = upcomingEvents.map((e) => ({
           _id: e._id,
           title: e.title,
           eventDate: e.eventDate,
@@ -819,7 +818,7 @@ async function run() {
         res.send({
           totalClubs,
           totalEvents,
-          upcomingEvents: eventsWithClub,
+          upcomingEvents: eventWithClub,
           memberships,
           payments,
         });
@@ -949,39 +948,39 @@ async function run() {
 
     // payment related apis
     app.post("/create-checkout-session", verifyFBToken, async (req, res) => {
-      console.log("🔥 /create-checkout-session called!");
-      console.log("Incoming request body:", req.body);
       try {
         const paymentInfo = req.body;
-        const { amount, clubName, userEmail, clubId } = paymentInfo;
 
-        if (!amount || !clubName || !userEmail || !clubId)
+        const { amount, clubName, memberEmail, clubId } = paymentInfo;
+
+        if (!amount || !clubName || !memberEmail || !clubId) {
           return res.status(400).send({ message: "Invalid payment data" });
+        }
 
         const session = await stripe.checkout.sessions.create({
           line_items: [
             {
               price_data: {
                 currency: "USD",
-                unit_amount: Number(amount) * 100,
+                unit_amount: Math.round(Number(amount) * 100),
                 product_data: {
                   name: clubName,
                 },
               },
-
               quantity: 1,
             },
           ],
-          customer_email: userEmail,
+          customer_email: memberEmail,
           mode: "payment",
           metadata: {
             clubId,
             clubName,
-            userEmail,
+            userEmail: memberEmail,
             amount,
-            type: "membership",
+            type: paymentInfo.type || "membership",
           },
-          success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?clubsId=${paymentInfo.clubId}&amount=${paymentInfo.amount}&clubName=${paymentInfo.clubName}`,
+          success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?clubId=${clubId}&eventId=${paymentInfo.eventId || ""}&amount=${amount}&type=${paymentInfo.type}&sessionId={CHECKOUT_SESSION_ID}`,
+
           cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancel`,
         });
 
@@ -993,74 +992,90 @@ async function run() {
     });
     // payment success api
     app.post("/payments/success", verifyFBToken, async (req, res) => {
+      console.log("Payment Data Received:", req.body);
       try {
         const { clubId, eventId, userEmail, amount, transactionId, type } =
           req.body;
         const email = userEmail || req.decoded_email;
 
-        if (!ObjectId.isValid(clubId)) {
-          return res.status(400).send({ message: "Invalid clubId" });
-        }
+        // club details (for payment record and membership update)
+        const filter = { _id: new ObjectId(clubId) };
+        const club = await clubsCollection.findOne(filter);
 
-        const club = await clubsCollection.findOne({
-          _id: new ObjectId(clubId),
-        });
-        if (!club) return res.status(404).send({ message: "Club not found" });
+        if (!club)
+          return res
+            .status(404)
+            .send({ success: false, message: "Club not found" });
 
-        // ১. পেমেন্ট রেকর্ড সেভ করা
+        // payment data (for payments collection)
         const paymentData = {
           userEmail: email,
-          clubId: clubId,
-          eventId: eventId || null,
+          clubId,
+          eventId: eventId && eventId !== "null" ? eventId : null,
           clubName: club.clubName,
           amount: parseFloat(amount) || 0,
-          type: type || "membership",
+          transactionId,
+          type: type || "memberships",
           status: "paid",
-          transactionId: transactionId || "ST_BYPASS_" + Date.now(),
           createdAt: new Date(),
         };
+        await paymentsCollection.insertOne(paymentData);
 
-        const paymentResult = await paymentsCollection.insertOne(paymentData);
+        // membership logic
+        if (type === "memberships" || !eventId || eventId === "null") {
+          const updateMembership = await membershipsCollection.updateOne(
+            { userEmail: email, clubId: clubId },
+            {
+              $set: {
+                status: "active",
+                clubName: club.clubName,
+                lastPaymentDate: new Date(),
+              },
+              $inc: { totalSpent: parseFloat(amount) || 0 },
+              $setOnInsert: { joinedAt: new Date() },
+            },
+            { upsert: true },
+          );
 
-        // ২. যদি এটি ইভেন্ট রেজিস্ট্রেশন হয়
-        if (type === "registrations" && eventId) {
+          // if new member (upsertedCount > 0), count 1 increase in club memberCount
+          if (updateMembership.upsertedCount > 0) {
+            await clubsCollection.updateOne(filter, {
+              $inc: { memberCount: 1 },
+            });
+          }
+
+          console.log(
+            `Updated membership for ${email}. Total Spent incremented by ${amount}`,
+          );
+        }
+
+        // Event registration logic
+        else if (type === "registrations" && eventId) {
           await registrationsCollection.updateOne(
-            { eventId, userEmail: email },
+            { eventId: eventId, userEmail: email },
             {
               $set: {
                 status: "paid",
                 paymentId: transactionId,
                 clubId,
+                clubName: club.clubName,
+                amount: parseFloat(amount) || 0,
                 paidAt: new Date(),
               },
             },
             { upsert: true },
           );
         }
-        // ৩. যদি এটি ক্লাব মেম্বারশিপ হয়
-        else {
-          const alreadyMember = await membershipsCollection.findOne({
-            userEmail: email,
-            clubId: clubId,
-          });
-          if (!alreadyMember) {
-            await membershipsCollection.insertOne({
-              userEmail: email,
-              clubId: clubId,
-              status: "active",
-              joinedAt: new Date(),
-            });
-          }
-        }
 
         res.send({
           success: true,
-          message: "Payment and record confirmed",
-          insertedId: paymentResult.insertedId, // এখানে paymentResult হবে
+          message: "Payment processed and Total Spent updated!",
         });
       } catch (error) {
-        console.error("payment API error", error);
-        res.status(500).send({ message: "Failed to save payment" });
+        console.error("Payment Success Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to process payment" });
       }
     });
     app.get("/admin/payments", verifyFBToken, verifyAdmin, async (req, res) => {
