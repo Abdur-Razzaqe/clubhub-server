@@ -833,35 +833,46 @@ async function run() {
       verifyFBToken,
       verifyAdmin,
       async (req, res) => {
-        const result = await membershipsCollection
-          .aggregate([
-            {
-              $group: {
-                _id: "$clubId",
-                totalMembers: { $sum: 1 },
+        try {
+          const result = await membershipsCollection
+            .aggregate([
+              {
+                $addFields: {
+                  clubObjectId: { $toObjectId: "$clubId" },
+                },
               },
-            },
-            {
-              $lookup: {
-                from: "clubs",
-                localField: "_id",
-                foreignField: "_id",
-                as: "club",
+              {
+                $group: {
+                  _id: "$clubObjectId",
+                  totalMembers: { $sum: 1 },
+                },
               },
-            },
-            {
-              $unwind: "$club",
-            },
-            {
-              $project: {
-                _id: 0,
-                clubName: "$club.clubName",
-                totalMembers: 1,
+              {
+                $lookup: {
+                  from: "clubs",
+                  localField: "_id",
+                  foreignField: "_id",
+                  as: "club",
+                },
               },
-            },
-          ])
-          .toArray();
-        res.send(result);
+              {
+                $unwind: "$club",
+              },
+              {
+                $project: {
+                  _id: 0,
+                  clubName: "$club.clubName",
+
+                  members: "$totalMembers",
+                },
+              },
+            ])
+            .toArray();
+
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: error.message });
+        }
       },
     );
 
